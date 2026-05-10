@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urljoin
 
 from playwright.sync_api import Locator, Page
 
@@ -105,7 +106,40 @@ def _parse_deadline_cell(value: str) -> dict[str, str]:
     }
 
 
-def _parse_raw_row(cells: list[str]) -> dict[str, str]:
+def _extract_detail_url(row: Locator) -> str:
+    links = row.locator("a[href]")
+    for i in range(links.count()):
+        link = links.nth(i)
+        href = (link.get_attribute("href") or "").strip()
+        text = ""
+        title = ""
+        try:
+            text = (link.inner_text() or "").strip().lower()
+            title = (link.get_attribute("title") or "").strip().lower()
+        except Exception:
+            pass
+
+        haystack = f"{href} {text} {title}".lower()
+        if "entreprisedetailsconsultation" in haystack or "suiviconsultation" in haystack or "popupdetaillots" in haystack or "détail" in haystack or "detail" in haystack:
+            return _normalize_detail_url(href)
+
+    for i in range(links.count()):
+        href = (links.nth(i).get_attribute("href") or "").strip()
+        if href and not href.startswith("javascript:"):
+            return _normalize_detail_url(href)
+
+    return ""
+
+
+def _normalize_detail_url(href: str) -> str:
+    href = href.strip()
+    javascript_url = re.search(r"popUp\('([^']+)'", href)
+    if javascript_url:
+        href = javascript_url.group(1)
+    return urljoin("https://www.marchespublics.gov.ma/", href)
+
+
+def _parse_raw_row(cells: list[str], detail_url: str) -> dict[str, str]:
     category_info = _parse_category_cell(cells[1] if len(cells) > 1 else "")
     reference_info = _parse_reference_cell(cells[2] if len(cells) > 2 else "")
     deadline_info = _parse_deadline_cell(cells[4] if len(cells) > 4 else "")
@@ -120,6 +154,7 @@ def _parse_raw_row(cells: list[str]) -> dict[str, str]:
         "date_publication": category_info["date_publication"],
         "date_limite": deadline_info["date_limite"],
         "heure_limite": deadline_info["heure_limite"],
+        "urlOfficielle": detail_url,
     }
 
 
@@ -132,7 +167,7 @@ def extract_table_rows(table: Locator) -> list[dict[str, str]]:
         cells = [_clean_text(c) for c in row.locator("td").all_inner_texts()]
         if not cells or not any(cells):
             continue
-        parsed = _parse_raw_row(cells)
+        parsed = _parse_raw_row(cells, _extract_detail_url(row))
         if parsed["reference"] or parsed["intitule"] or parsed["acheteur"]:
             out.append(parsed)
 
